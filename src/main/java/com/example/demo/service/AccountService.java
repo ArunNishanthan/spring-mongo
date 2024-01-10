@@ -5,5 +5,5 @@ import com.example.demo.model.RequestQueue;
 
 public interface AccountService {
 
-    AccountInfo save(RequestQueue requestQueue) throws Exception;
+    AccountInfo transact(RequestQueue requestQueue) throws Exception;
 }

@@ -17,6 +17,6 @@ public class AccountController {
 
     @PostMapping("/post")
     public ResponseEntity<AccountInfo> saveAccountInfo(@RequestBody RequestQueue requestQueue) throws Exception {
-        return ResponseEntity.ok(accountService.save(requestQueue));
+        return ResponseEntity.ok(accountService.transact(requestQueue));
     }
 }

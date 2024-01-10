@@ -1,6 +1,7 @@
 package com.example.demo.service.impl;
 
 import com.example.demo.model.AccountInfo;
+import com.example.demo.model.Address;
 import com.example.demo.model.RequestQueue;
 import com.example.demo.repositories.AccountInfoRepository;
 import com.example.demo.repositories.RequestQueueRepository;
@@ -10,6 +11,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.util.Optional;
+
+import static com.example.demo.utils.AppUtils.getIDForAccountInfo;
+
 @Service
 @AllArgsConstructor
 @Slf4j
@@ -18,22 +24,33 @@ public class AccountServiceImpl implements AccountService {
     private final AccountInfoRepository accountInfoRepository;
 
     private final RequestQueueRepository requestQueueRepository;
+
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public AccountInfo save(RequestQueue requestQueue) throws Exception {
-        try{
-            requestQueueRepository.save(requestQueue);
-            var accountInfo = accountInfoRepository.findAll().get(0);
-
-            if(requestQueue.getType().equalsIgnoreCase("C")){
+    public AccountInfo transact(RequestQueue requestQueue) throws Exception {
+        try {
+            var accountInfoId = getIDForAccountInfo(requestQueue.getAccountNumber(), requestQueue.getProductNumber(), requestQueue.getCurrencyCode());
+            Optional<AccountInfo> optionalAccountInfo = accountInfoRepository.findById(accountInfoId);
+            AccountInfo accountInfo = null;
+            if (optionalAccountInfo.isEmpty()) {
+                var address = Address.builder().country("India").state("TN").city("Chennai").build();
+                accountInfo = AccountInfo.builder().balance(new BigDecimal("10000"))
+                        .accountNumber(requestQueue.getAccountNumber()).currencyCode(requestQueue.getCurrencyCode()).productNumber(requestQueue.getProductNumber())
+                        .id(accountInfoId)
+                        .address(address).build();
+            } else {
+                accountInfo = optionalAccountInfo.get();
+            }
+            if (requestQueue.getType().equalsIgnoreCase("C")) {
                 accountInfo.setBalance(accountInfo.getBalance().add(requestQueue.getAmount()));
-                Thread.sleep(5000);
-            }else{
+                Thread.sleep(10000);
+            } else {
                 accountInfo.setBalance(accountInfo.getBalance().add(requestQueue.getAmount().negate()));
             }
-
-            return accountInfoRepository.save(accountInfo);
-        }catch (Exception exception){
+            var acc = accountInfoRepository.save(accountInfo);
+            requestQueueRepository.save(requestQueue);
+            return acc;
+        } catch (Exception exception) {
             log.info(exception.getLocalizedMessage());
             exception.printStackTrace();
             throw exception;

@@ -1,6 +1,15 @@
-
 spring:
   data:
     mongodb:
       uri: mongodb://127.0.0.1:27017/?directConnection=true&serverSelectionTimeoutMS=2000&appName=mongosh+2.1.1
       database: playground
+      auto-index-creation: true
+
+logging:
+  level:
+    org:
+      springframework:
+        data:
+          mongodb:
+            core:
+              MongoTemplate: DEBUG
