@@ -1,0 +1,689 @@
+// ================================
+// CORE LIBRARY - DOMAIN MODELS
+// ================================
+
+package com.makerchecker.core.domain;
+
+import javax.persistence.*;
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "mc_pending_requests")
+public class PendingRequest {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    
+    @Column(name = "entity_type", nullable = false)
+    private String entityType;
+    
+    @Column(name = "operation_type", nullable = false)
+    private String operationType;
+    
+    @Column(name = "request_data", nullable = false, columnDefinition = "TEXT")
+    private String requestData;
+    
+    @Column(name = "entity_id")
+    private String entityId;
+    
+    @Column(name = "requested_by", nullable = false)
+    private String requestedBy;
+    
+    @Column(name = "approved_by")
+    private String approvedBy;
+    
+    @Column(name = "rejected_by")
+    private String rejectedBy;
+    
+    @Column(name = "rejection_reason")
+    private String rejectionReason;
+    
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false)
+    private RequestStatus status = RequestStatus.PENDING;
+    
+    @Column(name = "requested_at", nullable = false)
+    private LocalDateTime requestedAt = LocalDateTime.now();
+    
+    @Column(name = "processed_at")
+    private LocalDateTime processedAt;
+    
+    @Column(name = "metadata", columnDefinition = "TEXT")
+    private String metadata; // Additional context data
+    
+    // Constructors
+    public PendingRequest() {}
+    
+    public PendingRequest(String entityType, String operationType, String requestData, 
+                         String entityId, String requestedBy) {
+        this.entityType = entityType;
+        this.operationType = operationType;
+        this.requestData = requestData;
+        this.entityId = entityId;
+        this.requestedBy = requestedBy;
+    }
+    
+    // Getters and Setters
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
+    
+    public String getEntityType() { return entityType; }
+    public void setEntityType(String entityType) { this.entityType = entityType; }
+    
+    public String getOperationType() { return operationType; }
+    public void setOperationType(String operationType) { this.operationType = operationType; }
+    
+    public String getRequestData() { return requestData; }
+    public void setRequestData(String requestData) { this.requestData = requestData; }
+    
+    public String getEntityId() { return entityId; }
+    public void setEntityId(String entityId) { this.entityId = entityId; }
+    
+    public String getRequestedBy() { return requestedBy; }
+    public void setRequestedBy(String requestedBy) { this.requestedBy = requestedBy; }
+    
+    public String getApprovedBy() { return approvedBy; }
+    public void setApprovedBy(String approvedBy) { this.approvedBy = approvedBy; }
+    
+    public String getRejectedBy() { return rejectedBy; }
+    public void setRejectedBy(String rejectedBy) { this.rejectedBy = rejectedBy; }
+    
+    public String getRejectionReason() { return rejectionReason; }
+    public void setRejectionReason(String rejectionReason) { this.rejectionReason = rejectionReason; }
+    
+    public RequestStatus getStatus() { return status; }
+    public void setStatus(RequestStatus status) { this.status = status; }
+    
+    public LocalDateTime getRequestedAt() { return requestedAt; }
+    public void setRequestedAt(LocalDateTime requestedAt) { this.requestedAt = requestedAt; }
+    
+    public LocalDateTime getProcessedAt() { return processedAt; }
+    public void setProcessedAt(LocalDateTime processedAt) { this.processedAt = processedAt; }
+    
+    public String getMetadata() { return metadata; }
+    public void setMetadata(String metadata) { this.metadata = metadata; }
+}
+
+// ================================
+// ENUMS AND VALUE OBJECTS
+// ================================
+
+package com.makerchecker.core.domain;
+
+public enum RequestStatus {
+    PENDING, APPROVED, REJECTED
+}
+
+package com.makerchecker.core.domain;
+
+public enum OperationType {
+    CREATE, UPDATE, DELETE
+}
+
+package com.makerchecker.core.domain;
+
+public class RequestContext {
+    private final String userId;
+    private final String metadata;
+    
+    public RequestContext(String userId) {
+        this(userId, null);
+    }
+    
+    public RequestContext(String userId, String metadata) {
+        this.userId = userId;
+        this.metadata = metadata;
+    }
+    
+    public String getUserId() { return userId; }
+    public String getMetadata() { return metadata; }
+}
+
+package com.makerchecker.core.domain;
+
+public class ApprovalResult {
+    private final boolean success;
+    private final String message;
+    private final Object processedEntity;
+    
+    private ApprovalResult(boolean success, String message, Object processedEntity) {
+        this.success = success;
+        this.message = message;
+        this.processedEntity = processedEntity;
+    }
+    
+    public static ApprovalResult success(Object processedEntity) {
+        return new ApprovalResult(true, null, processedEntity);
+    }
+    
+    public static ApprovalResult failure(String message) {
+        return new ApprovalResult(false, message, null);
+    }
+    
+    public boolean isSuccess() { return success; }
+    public String getMessage() { return message; }
+    public Object getProcessedEntity() { return processedEntity; }
+}
+
+// ================================
+// CORE INTERFACES
+// ================================
+
+package com.makerchecker.core.handler;
+
+import com.makerchecker.core.domain.ApprovalResult;
+
+public interface EntityHandler<T> {
+    /**
+     * Returns the unique entity type identifier for this handler
+     */
+    String getEntityType();
+    
+    /**
+     * Deserialize JSON data back to entity
+     */
+    T deserialize(String jsonData) throws HandlerException;
+    
+    /**
+     * Serialize entity to JSON
+     */
+    String serialize(T entity) throws HandlerException;
+    
+    /**
+     * Process CREATE operation - called when request is approved
+     */
+    ApprovalResult processCreate(T entity) throws HandlerException;
+    
+    /**
+     * Process UPDATE operation - called when request is approved
+     */
+    ApprovalResult processUpdate(String entityId, T updatedEntity) throws HandlerException;
+    
+    /**
+     * Process DELETE operation - called when request is approved
+     */
+    ApprovalResult processDelete(String entityId) throws HandlerException;
+    
+    /**
+     * Find entity by ID for DELETE requests (to capture current state)
+     */
+    T findById(String entityId) throws HandlerException;
+    
+    /**
+     * Validate entity before creating pending request (optional)
+     */
+    default void validateRequest(T entity, String operationType) throws HandlerException {
+        // Default implementation - no validation
+    }
+}
+
+package com.makerchecker.core.handler;
+
+public class HandlerException extends Exception {
+    public HandlerException(String message) {
+        super(message);
+    }
+    
+    public HandlerException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+
+// ================================
+// REPOSITORY INTERFACE
+// ================================
+
+package com.makerchecker.core.repository;
+
+import com.makerchecker.core.domain.PendingRequest;
+import com.makerchecker.core.domain.RequestStatus;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.stereotype.Repository;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+@Repository
+public interface PendingRequestRepository extends JpaRepository<PendingRequest, Long> {
+    
+    List<PendingRequest> findByStatus(RequestStatus status);
+    
+    List<PendingRequest> findByEntityTypeAndStatus(String entityType, RequestStatus status);
+    
+    List<PendingRequest> findByRequestedBy(String requestedBy);
+    
+    List<PendingRequest> findByRequestedByAndStatus(String requestedBy, RequestStatus status);
+    
+    List<PendingRequest> findByEntityTypeAndEntityIdAndStatus(String entityType, String entityId, RequestStatus status);
+    
+    @Query("SELECT p FROM PendingRequest p WHERE p.requestedAt BETWEEN ?1 AND ?2")
+    List<PendingRequest> findByRequestedAtBetween(LocalDateTime start, LocalDateTime end);
+    
+    @Query("SELECT p FROM PendingRequest p WHERE p.processedAt BETWEEN ?1 AND ?2")
+    List<PendingRequest> findByProcessedAtBetween(LocalDateTime start, LocalDateTime end);
+    
+    long countByStatus(RequestStatus status);
+    
+    long countByEntityTypeAndStatus(String entityType, RequestStatus status);
+}
+
+// ================================
+// CORE SERVICE IMPLEMENTATION
+// ================================
+
+package com.makerchecker.core.service;
+
+import com.makerchecker.core.domain.*;
+import com.makerchecker.core.handler.EntityHandler;
+import com.makerchecker.core.handler.HandlerException;
+import com.makerchecker.core.repository.PendingRequestRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.stream.Collectors;
+
+@Service
+@Transactional
+public class MakerCheckerService {
+    
+    private static final Logger logger = LoggerFactory.getLogger(MakerCheckerService.class);
+    
+    private final PendingRequestRepository repository;
+    private final Map<String, EntityHandler<?>> handlers;
+    
+    public MakerCheckerService(PendingRequestRepository repository,
+                              List<EntityHandler<?>> handlerList) {
+        this.repository = repository;
+        this.handlers = handlerList.stream()
+            .collect(Collectors.toMap(
+                EntityHandler::getEntityType,
+                handler -> handler,
+                (existing, replacement) -> {
+                    logger.warn("Duplicate handler for entity type: {}. Using first registered handler.", 
+                               existing.getEntityType());
+                    return existing;
+                }
+            ));
+        
+        logger.info("Initialized MakerChecker with {} handlers: {}", 
+                   handlers.size(), handlers.keySet());
+    }
+    
+    // ================================
+    // MAKER OPERATIONS
+    // ================================
+    
+    public Long submitCreateRequest(String entityType, Object entity, RequestContext context) 
+            throws MakerCheckerException {
+        return submitRequest(entityType, OperationType.CREATE, entity, null, context);
+    }
+    
+    public Long submitUpdateRequest(String entityType, String entityId, Object entity, RequestContext context) 
+            throws MakerCheckerException {
+        return submitRequest(entityType, OperationType.UPDATE, entity, entityId, context);
+    }
+    
+    public Long submitDeleteRequest(String entityType, String entityId, RequestContext context) 
+            throws MakerCheckerException {
+        EntityHandler handler = getHandler(entityType);
+        try {
+            Object entity = handler.findById(entityId);
+            return submitRequest(entityType, OperationType.DELETE, entity, entityId, context);
+        } catch (HandlerException e) {
+            throw new MakerCheckerException("Failed to find entity for delete request", e);
+        }
+    }
+    
+    @SuppressWarnings("unchecked")
+    private Long submitRequest(String entityType, OperationType operation, Object entity, 
+                              String entityId, RequestContext context) throws MakerCheckerException {
+        EntityHandler handler = getHandler(entityType);
+        
+        try {
+            // Validate request
+            handler.validateRequest(entity, operation.name());
+            
+            // Serialize entity
+            String jsonData = handler.serialize(entity);
+            
+            // Create pending request
+            PendingRequest request = new PendingRequest(
+                entityType, operation.name(), jsonData, entityId, context.getUserId()
+            );
+            request.setMetadata(context.getMetadata());
+            
+            PendingRequest saved = repository.save(request);
+            
+            logger.info("Created {} request {} for entity type {} by user {}", 
+                       operation, saved.getId(), entityType, context.getUserId());
+            
+            return saved.getId();
+            
+        } catch (HandlerException e) {
+            throw new MakerCheckerException("Failed to submit " + operation + " request", e);
+        }
+    }
+    
+    // ================================
+    // CHECKER OPERATIONS
+    // ================================
+    
+    public ApprovalResult approveRequest(Long requestId, RequestContext context) throws MakerCheckerException {
+        PendingRequest request = getValidPendingRequest(requestId);
+        EntityHandler handler = getHandler(request.getEntityType());
+        
+        try {
+            ApprovalResult result = processApproval(handler, request);
+            
+            if (result.isSuccess()) {
+                request.setStatus(RequestStatus.APPROVED);
+                request.setApprovedBy(context.getUserId());
+                request.setProcessedAt(LocalDateTime.now());
+                
+                repository.save(request);
+                
+                logger.info("Approved request {} by user {}", requestId, context.getUserId());
+            } else {
+                logger.warn("Approval processing failed for request {}: {}", requestId, result.getMessage());
+                throw new MakerCheckerException("Approval processing failed: " + result.getMessage());
+            }
+            
+            return result;
+            
+        } catch (HandlerException e) {
+            logger.error("Handler error during approval of request {}", requestId, e);
+            throw new MakerCheckerException("Failed to process approval", e);
+        }
+    }
+    
+    public void rejectRequest(Long requestId, String rejectionReason, RequestContext context) 
+            throws MakerCheckerException {
+        PendingRequest request = getValidPendingRequest(requestId);
+        
+        request.setStatus(RequestStatus.REJECTED);
+        request.setRejectedBy(context.getUserId());
+        request.setRejectionReason(rejectionReason);
+        request.setProcessedAt(LocalDateTime.now());
+        
+        repository.save(request);
+        
+        logger.info("Rejected request {} by user {} with reason: {}", 
+                   requestId, context.getUserId(), rejectionReason);
+    }
+    
+    @SuppressWarnings("unchecked")
+    private ApprovalResult processApproval(EntityHandler handler, PendingRequest request) 
+            throws HandlerException {
+        Object entity = handler.deserialize(request.getRequestData());
+        
+        switch (OperationType.valueOf(request.getOperationType())) {
+            case CREATE:
+                return handler.processCreate(entity);
+            case UPDATE:
+                return handler.processUpdate(request.getEntityId(), entity);
+            case DELETE:
+                return handler.processDelete(request.getEntityId());
+            default:
+                throw new HandlerException("Unknown operation type: " + request.getOperationType());
+        }
+    }
+    
+    // ================================
+    // QUERY OPERATIONS
+    // ================================
+    
+    public List<PendingRequest> getPendingRequests() {
+        return repository.findByStatus(RequestStatus.PENDING);
+    }
+    
+    public List<PendingRequest> getPendingRequestsByEntityType(String entityType) {
+        return repository.findByEntityTypeAndStatus(entityType, RequestStatus.PENDING);
+    }
+    
+    public List<PendingRequest> getRequestsByUser(String userId) {
+        return repository.findByRequestedBy(userId);
+    }
+    
+    public List<PendingRequest> getPendingRequestsByUser(String userId) {
+        return repository.findByRequestedByAndStatus(userId, RequestStatus.PENDING);
+    }
+    
+    public Optional<PendingRequest> getRequestById(Long requestId) {
+        return repository.findById(requestId);
+    }
+    
+    public List<PendingRequest> getRequestsByDateRange(LocalDateTime start, LocalDateTime end) {
+        return repository.findByRequestedAtBetween(start, end);
+    }
+    
+    public long getPendingRequestCount() {
+        return repository.countByStatus(RequestStatus.PENDING);
+    }
+    
+    public long getPendingRequestCount(String entityType) {
+        return repository.countByEntityTypeAndStatus(entityType, RequestStatus.PENDING);
+    }
+    
+    // ================================
+    // UTILITY METHODS
+    // ================================
+    
+    public boolean isEntityTypeSupported(String entityType) {
+        return handlers.containsKey(entityType);
+    }
+    
+    public List<String> getSupportedEntityTypes() {
+        return handlers.keySet().stream().sorted().collect(Collectors.toList());
+    }
+    
+    // ================================
+    // PRIVATE HELPER METHODS
+    // ================================
+    
+    private EntityHandler getHandler(String entityType) throws MakerCheckerException {
+        EntityHandler handler = handlers.get(entityType);
+        if (handler == null) {
+            throw new MakerCheckerException("No handler registered for entity type: " + entityType);
+        }
+        return handler;
+    }
+    
+    private PendingRequest getValidPendingRequest(Long requestId) throws MakerCheckerException {
+        PendingRequest request = repository.findById(requestId)
+            .orElseThrow(() -> new MakerCheckerException("Request not found: " + requestId));
+        
+        if (request.getStatus() != RequestStatus.PENDING) {
+            throw new MakerCheckerException("Request already processed: " + requestId);
+        }
+        
+        return request;
+    }
+}
+
+// ================================
+// EXCEPTION CLASSES
+// ================================
+
+package com.makerchecker.core.service;
+
+public class MakerCheckerException extends Exception {
+    public MakerCheckerException(String message) {
+        super(message);
+    }
+    
+    public MakerCheckerException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+
+// ================================
+// AUTO-CONFIGURATION
+// ================================
+
+package com.makerchecker.core.config;
+
+import com.makerchecker.core.repository.PendingRequestRepository;
+import com.makerchecker.core.service.MakerCheckerService;
+import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.domain.EntityScan;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+
+@AutoConfiguration
+@ConditionalOnClass({MakerCheckerService.class})
+@ComponentScan("com.makerchecker.core")
+@EntityScan("com.makerchecker.core.domain")
+@EnableJpaRepositories("com.makerchecker.core.repository")
+public class MakerCheckerAutoConfiguration {
+    // Auto-configuration will be handled by Spring Boot
+}
+
+// ================================
+// LIBRARY USAGE EXAMPLE
+// ================================
+
+// Example: User Entity Handler Implementation
+package com.example.handlers;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.makerchecker.core.domain.ApprovalResult;
+import com.makerchecker.core.handler.EntityHandler;
+import com.makerchecker.core.handler.HandlerException;
+import org.springframework.stereotype.Component;
+
+@Component
+public class UserEntityHandler implements EntityHandler<User> {
+    
+    private final UserRepository userRepository;
+    private final ObjectMapper objectMapper;
+    
+    public UserEntityHandler(UserRepository userRepository, ObjectMapper objectMapper) {
+        this.userRepository = userRepository;
+        this.objectMapper = objectMapper;
+    }
+    
+    @Override
+    public String getEntityType() {
+        return "USER";
+    }
+    
+    @Override
+    public User deserialize(String jsonData) throws HandlerException {
+        try {
+            return objectMapper.readValue(jsonData, User.class);
+        } catch (JsonProcessingException e) {
+            throw new HandlerException("Failed to deserialize user data", e);
+        }
+    }
+    
+    @Override
+    public String serialize(User entity) throws HandlerException {
+        try {
+            return objectMapper.writeValueAsString(entity);
+        } catch (JsonProcessingException e) {
+            throw new HandlerException("Failed to serialize user data", e);
+        }
+    }
+    
+    @Override
+    public ApprovalResult processCreate(User entity) throws HandlerException {
+        try {
+            User saved = userRepository.save(entity);
+            return ApprovalResult.success(saved);
+        } catch (Exception e) {
+            return ApprovalResult.failure("Failed to create user: " + e.getMessage());
+        }
+    }
+    
+    @Override
+    public ApprovalResult processUpdate(String entityId, User updatedEntity) throws HandlerException {
+        try {
+            User existing = userRepository.findById(Long.parseLong(entityId))
+                .orElseThrow(() -> new HandlerException("User not found: " + entityId));
+            
+            existing.setUsername(updatedEntity.getUsername());
+            existing.setEmail(updatedEntity.getEmail());
+            existing.setFullName(updatedEntity.getFullName());
+            
+            User saved = userRepository.save(existing);
+            return ApprovalResult.success(saved);
+        } catch (Exception e) {
+            return ApprovalResult.failure("Failed to update user: " + e.getMessage());
+        }
+    }
+    
+    @Override
+    public ApprovalResult processDelete(String entityId) throws HandlerException {
+        try {
+            userRepository.deleteById(Long.parseLong(entityId));
+            return ApprovalResult.success(null);
+        } catch (Exception e) {
+            return ApprovalResult.failure("Failed to delete user: " + e.getMessage());
+        }
+    }
+    
+    @Override
+    public User findById(String entityId) throws HandlerException {
+        return userRepository.findById(Long.parseLong(entityId))
+            .orElseThrow(() -> new HandlerException("User not found: " + entityId));
+    }
+    
+    @Override
+    public void validateRequest(User entity, String operationType) throws HandlerException {
+        if (entity.getUsername() == null || entity.getUsername().trim().isEmpty()) {
+            throw new HandlerException("Username is required");
+        }
+        if (entity.getEmail() == null || entity.getEmail().trim().isEmpty()) {
+            throw new HandlerException("Email is required");
+        }
+        // Add more validation as needed
+    }
+}
+
+// ================================
+// USAGE IN APPLICATION
+// ================================
+
+@RestController
+@RequestMapping("/api/users")
+public class UserController {
+    
+    private final MakerCheckerService makerCheckerService;
+    
+    public UserController(MakerCheckerService makerCheckerService) {
+        this.makerCheckerService = makerCheckerService;
+    }
+    
+    @PostMapping
+    public ResponseEntity<Map<String, Long>> createUser(@RequestBody User user, 
+                                                       @RequestHeader("X-User-ID") String userId) {
+        try {
+            RequestContext context = new RequestContext(userId);
+            Long requestId = makerCheckerService.submitCreateRequest("USER", user, context);
+            return ResponseEntity.ok(Map.of("requestId", requestId));
+        } catch (MakerCheckerException e) {
+            return ResponseEntity.badRequest().build();
+        }
+    }
+    
+    @PostMapping("/approve/{requestId}")
+    public ResponseEntity<ApprovalResult> approveRequest(@PathVariable Long requestId,
+                                                        @RequestHeader("X-User-ID") String userId) {
+        try {
+            RequestContext context = new RequestContext(userId);
+            ApprovalResult result = makerCheckerService.approveRequest(requestId, context);
+            return ResponseEntity.ok(result);
+        } catch (MakerCheckerException e) {
+            return ResponseEntity.badRequest().build();
+        }
+    }
+}
