@@ -1,0 +1,759 @@
+// ============================================================================
+// MAKER-CHECKER LIBRARY - MINIMAL BOILERPLATE FRAMEWORK
+// ============================================================================
+
+// 1. Core Annotations
+@Target(ElementType.TYPE)
+@Retention(RetentionPolicy.RUNTIME)
+@Component
+public @interface MakerCheckerEntity {
+    String value() default ""; // Entity type name, defaults to class simple name
+}
+
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface MakerCheckerService {
+    String entityType() default "";
+}
+
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface CreateOperation {
+}
+
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface UpdateOperation {
+}
+
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface DeleteOperation {
+}
+
+// 2. Base interfaces (minimal)
+public interface MakerCheckerEntityMarker {
+    default String getEntityId() {
+        try {
+            Field idField = findIdField(this.getClass());
+            idField.setAccessible(true);
+            Object value = idField.get(this);
+            return value != null ? value.toString() : null;
+        } catch (Exception e) {
+            throw new RuntimeException("Entity must have @Id field or override getEntityId()", e);
+        }
+    }
+    
+    default String getEntityType() {
+        MakerCheckerEntity annotation = this.getClass().getAnnotation(MakerCheckerEntity.class);
+        if (annotation != null && !annotation.value().isEmpty()) {
+            return annotation.value();
+        }
+        return this.getClass().getSimpleName().toUpperCase();
+    }
+    
+    private Field findIdField(Class<?> clazz) {
+        while (clazz != null) {
+            for (Field field : clazz.getDeclaredFields()) {
+                if (field.isAnnotationPresent(Id.class)) {
+                    return field;
+                }
+            }
+            clazz = clazz.getSuperclass();
+        }
+        throw new RuntimeException("No @Id field found in entity hierarchy");
+    }
+}
+
+// 3. Enums (same as before)
+public enum OperationType {
+    CREATE, UPDATE, DELETE
+}
+
+public enum ApprovalStatus {
+    PENDING, APPROVED, REJECTED
+}
+
+// 4. PendingOperation entity (same as before)
+@Entity
+@Table(name = "pending_operations")
+public class PendingOperation {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    
+    @Column(name = "entity_id", nullable = false)
+    private String entityId;
+    
+    @Column(name = "entity_type", nullable = false)
+    private String entityType;
+    
+    @Enumerated(EnumType.STRING)
+    @Column(name = "operation_type", nullable = false)
+    private OperationType operationType;
+    
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false)
+    private ApprovalStatus status = ApprovalStatus.PENDING;
+    
+    @Column(name = "maker_id", nullable = false)
+    private String makerId;
+    
+    @Column(name = "checker_id")
+    private String checkerId;
+    
+    @Column(name = "operation_data", columnDefinition = "TEXT")
+    private String operationData;
+    
+    @Column(name = "created_at", nullable = false)
+    private LocalDateTime createdAt = LocalDateTime.now();
+    
+    @Column(name = "checked_at")
+    private LocalDateTime checkedAt;
+    
+    @Column(name = "comments")
+    private String comments;
+    
+    // Constructors, getters, and setters
+    public PendingOperation() {}
+    
+    public PendingOperation(String entityId, String entityType, OperationType operationType, 
+                          String makerId, String operationData) {
+        this.entityId = entityId;
+        this.entityType = entityType;
+        this.operationType = operationType;
+        this.makerId = makerId;
+        this.operationData = operationData;
+    }
+    
+    // All getters and setters
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
+    
+    public String getEntityId() { return entityId; }
+    public void setEntityId(String entityId) { this.entityId = entityId; }
+    
+    public String getEntityType() { return entityType; }
+    public void setEntityType(String entityType) { this.entityType = entityType; }
+    
+    public OperationType getOperationType() { return operationType; }
+    public void setOperationType(OperationType operationType) { this.operationType = operationType; }
+    
+    public ApprovalStatus getStatus() { return status; }
+    public void setStatus(ApprovalStatus status) { this.status = status; }
+    
+    public String getMakerId() { return makerId; }
+    public void setMakerId(String makerId) { this.makerId = makerId; }
+    
+    public String getCheckerId() { return checkerId; }
+    public void setCheckerId(String checkerId) { this.checkerId = checkerId; }
+    
+    public String getOperationData() { return operationData; }
+    public void setOperationData(String operationData) { this.operationData = operationData; }
+    
+    public LocalDateTime getCreatedAt() { return createdAt; }
+    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+    
+    public LocalDateTime getCheckedAt() { return checkedAt; }
+    public void setCheckedAt(LocalDateTime checkedAt) { this.checkedAt = checkedAt; }
+    
+    public String getComments() { return comments; }
+    public void setComments(String comments) { this.comments = comments; }
+}
+
+// 5. Repository
+@Repository
+public interface PendingOperationRepository extends JpaRepository<PendingOperation, Long> {
+    List<PendingOperation> findByStatusAndEntityType(ApprovalStatus status, String entityType);
+    List<PendingOperation> findByMakerId(String makerId);
+    List<PendingOperation> findByStatus(ApprovalStatus status);
+    Optional<PendingOperation> findByEntityIdAndEntityTypeAndStatus(String entityId, String entityType, ApprovalStatus status);
+}
+
+// 6. Auto-generated Operation Handler
+public class AutoOperationHandler<T extends MakerCheckerEntityMarker> {
+    
+    private final Class<T> entityClass;
+    private final Object serviceBean;
+    private final Method createMethod;
+    private final Method updateMethod;
+    private final Method deleteMethod;
+    private final ObjectMapper objectMapper;
+    
+    public AutoOperationHandler(Class<T> entityClass, Object serviceBean, 
+                               Method createMethod, Method updateMethod, Method deleteMethod,
+                               ObjectMapper objectMapper) {
+        this.entityClass = entityClass;
+        this.serviceBean = serviceBean;
+        this.createMethod = createMethod;
+        this.updateMethod = updateMethod;
+        this.deleteMethod = deleteMethod;
+        this.objectMapper = objectMapper;
+    }
+    
+    public void executeCreate(T entity) {
+        try {
+            createMethod.invoke(serviceBean, entity);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to execute create operation", e);
+        }
+    }
+    
+    public void executeUpdate(T entity) {
+        try {
+            updateMethod.invoke(serviceBean, entity);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to execute update operation", e);
+        }
+    }
+    
+    public void executeDelete(String entityId) {
+        try {
+            deleteMethod.invoke(serviceBean, entityId);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to execute delete operation", e);
+        }
+    }
+    
+    public T deserializeEntity(String operationData) {
+        try {
+            return objectMapper.readValue(operationData, entityClass);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to deserialize entity", e);
+        }
+    }
+    
+    public String serializeEntity(T entity) {
+        try {
+            return objectMapper.writeValueAsString(entity);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to serialize entity", e);
+        }
+    }
+    
+    public String getEntityType() {
+        return ((MakerCheckerEntityMarker) entityClass.getDeclaredConstructor().newInstance()).getEntityType();
+    }
+}
+
+// 7. Main Framework Service
+@Service
+@Transactional
+public class MakerCheckerFramework {
+    
+    private final PendingOperationRepository pendingOperationRepository;
+    private final Map<String, AutoOperationHandler<?>> operationHandlers;
+    private final ObjectMapper objectMapper;
+    
+    public MakerCheckerFramework(PendingOperationRepository pendingOperationRepository,
+                               ApplicationContext applicationContext,
+                               ObjectMapper objectMapper) {
+        this.pendingOperationRepository = pendingOperationRepository;
+        this.objectMapper = objectMapper;
+        this.operationHandlers = discoverHandlers(applicationContext);
+    }
+    
+    @SuppressWarnings("unchecked")
+    private Map<String, AutoOperationHandler<?>> discoverHandlers(ApplicationContext applicationContext) {
+        Map<String, AutoOperationHandler<?>> handlers = new HashMap<>();
+        
+        // Find all beans annotated with @MakerCheckerService
+        Map<String, Object> serviceBeans = applicationContext.getBeansWithAnnotation(MakerCheckerService.class);
+        
+        for (Object serviceBean : serviceBeans.values()) {
+            Method createMethod = null, updateMethod = null, deleteMethod = null;
+            Class<?> entityClass = null;
+            
+            // Find annotated methods
+            for (Method method : serviceBean.getClass().getMethods()) {
+                if (method.isAnnotationPresent(CreateOperation.class)) {
+                    createMethod = method;
+                    if (entityClass == null && method.getParameterCount() > 0) {
+                        entityClass = method.getParameterTypes()[0];
+                    }
+                }
+                if (method.isAnnotationPresent(UpdateOperation.class)) {
+                    updateMethod = method;
+                    if (entityClass == null && method.getParameterCount() > 0) {
+                        entityClass = method.getParameterTypes()[0];
+                    }
+                }
+                if (method.isAnnotationPresent(DeleteOperation.class)) {
+                    deleteMethod = method;
+                }
+            }
+            
+            if (entityClass != null && MakerCheckerEntityMarker.class.isAssignableFrom(entityClass)) {
+                try {
+                    AutoOperationHandler<?> handler = new AutoOperationHandler<>(
+                        (Class<? extends MakerCheckerEntityMarker>) entityClass,
+                        serviceBean, createMethod, updateMethod, deleteMethod, objectMapper
+                    );
+                    handlers.put(handler.getEntityType(), handler);
+                } catch (Exception e) {
+                    throw new RuntimeException("Failed to create handler for " + entityClass.getSimpleName(), e);
+                }
+            }
+        }
+        
+        return handlers;
+    }
+    
+    public <T extends MakerCheckerEntityMarker> PendingOperation submitForApproval(
+            T entity, OperationType operationType, String makerId) {
+        
+        AutoOperationHandler<T> handler = getHandler(entity.getEntityType());
+        String operationData = handler.serializeEntity(entity);
+        
+        // Check if there's already a pending operation for this entity
+        Optional<PendingOperation> existing = pendingOperationRepository
+            .findByEntityIdAndEntityTypeAndStatus(
+                entity.getEntityId(), 
+                entity.getEntityType(), 
+                ApprovalStatus.PENDING
+            );
+            
+        if (existing.isPresent()) {
+            throw new IllegalStateException("Pending operation already exists for this entity");
+        }
+        
+        PendingOperation pendingOp = new PendingOperation(
+            entity.getEntityId(),
+            entity.getEntityType(),
+            operationType,
+            makerId,
+            operationData
+        );
+        
+        return pendingOperationRepository.save(pendingOp);
+    }
+    
+    public void approveOperation(Long operationId, String checkerId, String comments) {
+        PendingOperation pendingOp = pendingOperationRepository.findById(operationId)
+            .orElseThrow(() -> new IllegalArgumentException("Operation not found"));
+            
+        if (pendingOp.getStatus() != ApprovalStatus.PENDING) {
+            throw new IllegalStateException("Operation is not in pending status");
+        }
+        
+        if (pendingOp.getMakerId().equals(checkerId)) {
+            throw new IllegalStateException("Maker and checker cannot be the same person");
+        }
+        
+        try {
+            executeOperation(pendingOp);
+            
+            pendingOp.setStatus(ApprovalStatus.APPROVED);
+            pendingOp.setCheckerId(checkerId);
+            pendingOp.setCheckedAt(LocalDateTime.now());
+            pendingOp.setComments(comments);
+            
+            pendingOperationRepository.save(pendingOp);
+            
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to execute approved operation", e);
+        }
+    }
+    
+    public void rejectOperation(Long operationId, String checkerId, String comments) {
+        PendingOperation pendingOp = pendingOperationRepository.findById(operationId)
+            .orElseThrow(() -> new IllegalArgumentException("Operation not found"));
+            
+        if (pendingOp.getStatus() != ApprovalStatus.PENDING) {
+            throw new IllegalStateException("Operation is not in pending status");
+        }
+        
+        if (pendingOp.getMakerId().equals(checkerId)) {
+            throw new IllegalStateException("Maker and checker cannot be the same person");
+        }
+        
+        pendingOp.setStatus(ApprovalStatus.REJECTED);
+        pendingOp.setCheckerId(checkerId);
+        pendingOp.setCheckedAt(LocalDateTime.now());
+        pendingOp.setComments(comments);
+        
+        pendingOperationRepository.save(pendingOp);
+    }
+    
+    public List<PendingOperation> getPendingOperations() {
+        return pendingOperationRepository.findByStatus(ApprovalStatus.PENDING);
+    }
+    
+    public List<PendingOperation> getPendingOperationsByType(String entityType) {
+        return pendingOperationRepository.findByStatusAndEntityType(ApprovalStatus.PENDING, entityType);
+    }
+    
+    public List<PendingOperation> getOperationsByMaker(String makerId) {
+        return pendingOperationRepository.findByMakerId(makerId);
+    }
+    
+    @SuppressWarnings("unchecked")
+    private <T extends MakerCheckerEntityMarker> AutoOperationHandler<T> getHandler(String entityType) {
+        AutoOperationHandler<?> handler = operationHandlers.get(entityType);
+        if (handler == null) {
+            throw new IllegalArgumentException("No handler found for entity type: " + entityType);
+        }
+        return (AutoOperationHandler<T>) handler;
+    }
+    
+    @SuppressWarnings("unchecked")
+    private void executeOperation(PendingOperation pendingOp) {
+        AutoOperationHandler<MakerCheckerEntityMarker> handler = getHandler(pendingOp.getEntityType());
+        
+        switch (pendingOp.getOperationType()) {
+            case CREATE:
+                MakerCheckerEntityMarker createEntity = handler.deserializeEntity(pendingOp.getOperationData());
+                handler.executeCreate(createEntity);
+                break;
+                
+            case UPDATE:
+                MakerCheckerEntityMarker updateEntity = handler.deserializeEntity(pendingOp.getOperationData());
+                handler.executeUpdate(updateEntity);
+                break;
+                
+            case DELETE:
+                handler.executeDelete(pendingOp.getEntityId());
+                break;
+                
+            default:
+                throw new IllegalArgumentException("Unsupported operation type: " + pendingOp.getOperationType());
+        }
+    }
+}
+
+// 8. Auto Configuration
+@Configuration
+@EnableJpaRepositories
+@ComponentScan
+public class MakerCheckerAutoConfiguration {
+    
+    @Bean
+    @ConditionalOnMissingBean
+    public ObjectMapper objectMapper() {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.registerModule(new JavaTimeModule());
+        mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        return mapper;
+    }
+    
+    @Bean
+    public MakerCheckerFramework makerCheckerFramework(
+            PendingOperationRepository repository,
+            ApplicationContext applicationContext,
+            ObjectMapper objectMapper) {
+        return new MakerCheckerFramework(repository, applicationContext, objectMapper);
+    }
+}
+
+// 9. Generic REST Controller
+@RestController
+@RequestMapping("/api/maker-checker")
+public class MakerCheckerController {
+    
+    private final MakerCheckerFramework makerCheckerFramework;
+    
+    public MakerCheckerController(MakerCheckerFramework makerCheckerFramework) {
+        this.makerCheckerFramework = makerCheckerFramework;
+    }
+    
+    @GetMapping("/pending")
+    public ResponseEntity<List<PendingOperation>> getPendingOperations() {
+        return ResponseEntity.ok(makerCheckerFramework.getPendingOperations());
+    }
+    
+    @GetMapping("/pending/{entityType}")
+    public ResponseEntity<List<PendingOperation>> getPendingOperationsByType(@PathVariable String entityType) {
+        return ResponseEntity.ok(makerCheckerFramework.getPendingOperationsByType(entityType));
+    }
+    
+    @GetMapping("/maker/{makerId}")
+    public ResponseEntity<List<PendingOperation>> getOperationsByMaker(@PathVariable String makerId) {
+        return ResponseEntity.ok(makerCheckerFramework.getOperationsByMaker(makerId));
+    }
+    
+    @PostMapping("/approve/{operationId}")
+    public ResponseEntity<Void> approveOperation(
+            @PathVariable Long operationId,
+            @RequestParam String checkerId,
+            @RequestParam(required = false) String comments) {
+        
+        makerCheckerFramework.approveOperation(operationId, checkerId, comments);
+        return ResponseEntity.ok().build();
+    }
+    
+    @PostMapping("/reject/{operationId}")
+    public ResponseEntity<Void> rejectOperation(
+            @PathVariable Long operationId,
+            @RequestParam String checkerId,
+            @RequestParam(required = false) String comments) {
+        
+        makerCheckerFramework.rejectOperation(operationId, checkerId, comments);
+        return ResponseEntity.ok().build();
+    }
+}
+
+// ============================================================================
+// USAGE EXAMPLES - MINIMAL BOILERPLATE
+// ============================================================================
+
+// Example 1: Simple User Entity (MINIMAL CODE!)
+@Entity
+@MakerCheckerEntity("USER") // Optional: defaults to "USER" anyway
+public class User implements MakerCheckerEntityMarker {
+    @Id
+    private String id;
+    
+    @Column(unique = true, nullable = false)
+    private String username;
+    
+    @Column(nullable = false)
+    private String email;
+    
+    private String fullName;
+    private boolean active = true;
+    
+    // Only constructors, getters, setters - NO OTHER CODE NEEDED!
+    public User() {}
+    
+    public User(String id, String username, String email, String fullName) {
+        this.id = id;
+        this.username = username;
+        this.email = email;
+        this.fullName = fullName;
+    }
+    
+    // Standard getters/setters
+    public String getId() { return id; }
+    public void setId(String id) { this.id = id; }
+    
+    public String getUsername() { return username; }
+    public void setUsername(String username) { this.username = username; }
+    
+    public String getEmail() { return email; }
+    public void setEmail(String email) { this.email = email; }
+    
+    public String getFullName() { return fullName; }
+    public void setFullName(String fullName) { this.fullName = fullName; }
+    
+    public boolean isActive() { return active; }
+    public void setActive(boolean active) { this.active = active; }
+}
+
+// User Repository (standard JPA)
+@Repository
+public interface UserRepository extends JpaRepository<User, String> {
+    Optional<User> findByUsername(String username);
+}
+
+// User Service (ONLY 3 ANNOTATIONS NEEDED!)
+@Service
+@MakerCheckerService
+public class UserService {
+    
+    private final UserRepository userRepository;
+    
+    public UserService(UserRepository userRepository) {
+        this.userRepository = userRepository;
+    }
+    
+    @CreateOperation
+    public void createUser(User user) {
+        userRepository.save(user);
+    }
+    
+    @UpdateOperation  
+    public void updateUser(User user) {
+        userRepository.save(user);
+    }
+    
+    @DeleteOperation
+    public void deleteUser(String userId) {
+        userRepository.deleteById(userId);
+    }
+    
+    // Regular business methods (no annotations needed)
+    public List<User> getAllUsers() {
+        return userRepository.findAll();
+    }
+    
+    public Optional<User> getUserById(String id) {
+        return userRepository.findById(id);
+    }
+}
+
+// Example 2: Transaction Entity (STILL MINIMAL!)
+@Entity
+@MakerCheckerEntity("TRANSACTION")
+public class TransactionRequest implements MakerCheckerEntityMarker {
+    @Id
+    private String id;
+    
+    @Column(nullable = false)
+    private String fromAccount;
+    
+    @Column(nullable = false)
+    private String toAccount;
+    
+    @Column(nullable = false, precision = 19, scale = 2)
+    private BigDecimal amount;
+    
+    @Column(nullable = false)
+    private String currency;
+    
+    private String description;
+    private String transactionType;
+    private String referenceNumber;
+    private String status = "PENDING";
+    
+    @Column(nullable = false)
+    private LocalDateTime createdAt = LocalDateTime.now();
+    
+    // Standard constructors, getters, setters - NO HANDLER CODE!
+    public TransactionRequest() {}
+    
+    public TransactionRequest(String id, String fromAccount, String toAccount, 
+                            BigDecimal amount, String currency, String transactionType, String description) {
+        this.id = id;
+        this.fromAccount = fromAccount;
+        this.toAccount = toAccount;
+        this.amount = amount;
+        this.currency = currency;
+        this.transactionType = transactionType;
+        this.description = description;
+        this.referenceNumber = "TXN" + System.currentTimeMillis();
+    }
+    
+    // Standard getters/setters (omitted for brevity)
+    public String getId() { return id; }
+    public void setId(String id) { this.id = id; }
+    
+    public String getFromAccount() { return fromAccount; }
+    public void setFromAccount(String fromAccount) { this.fromAccount = fromAccount; }
+    
+    public String getToAccount() { return toAccount; }
+    public void setToAccount(String toAccount) { this.toAccount = toAccount; }
+    
+    public BigDecimal getAmount() { return amount; }
+    public void setAmount(BigDecimal amount) { this.amount = amount; }
+    
+    public String getCurrency() { return currency; }
+    public void setCurrency(String currency) { this.currency = currency; }
+    
+    public String getDescription() { return description; }
+    public void setDescription(String description) { this.description = description; }
+    
+    public String getTransactionType() { return transactionType; }
+    public void setTransactionType(String transactionType) { this.transactionType = transactionType; }
+    
+    public String getReferenceNumber() { return referenceNumber; }
+    public void setReferenceNumber(String referenceNumber) { this.referenceNumber = referenceNumber; }
+    
+    public String getStatus() { return status; }
+    public void setStatus(String status) { this.status = status; }
+    
+    public LocalDateTime getCreatedAt() { return createdAt; }
+    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+}
+
+@Repository
+public interface TransactionRepository extends JpaRepository<TransactionRequest, String> {
+    List<TransactionRequest> findByStatus(String status);
+}
+
+// Simple Account Service for demo
+@Service
+public class AccountService {
+    private final Map<String, BigDecimal> balances = Map.of(
+        "ACC001", new BigDecimal("10000"),
+        "ACC002", new BigDecimal("5000")
+    );
+    
+    public boolean hasSufficientBalance(String account, BigDecimal amount) {
+        return balances.getOrDefault(account, BigDecimal.ZERO).compareTo(amount) >= 0;
+    }
+    
+    public void processTransaction(TransactionRequest txn) {
+        // Mock transaction processing
+        txn.setStatus("EXECUTED");
+    }
+}
+
+// Transaction Service (ONLY 3 ANNOTATIONS!)
+@Service  
+@MakerCheckerService
+public class TransactionService {
+    
+    private final TransactionRepository transactionRepository;
+    private final AccountService accountService;
+    
+    public TransactionService(TransactionRepository transactionRepository, AccountService accountService) {
+        this.transactionRepository = transactionRepository;
+        this.accountService = accountService;
+    }
+    
+    @CreateOperation
+    public void createTransaction(TransactionRequest transaction) {
+        // Validation
+        if (!accountService.hasSufficientBalance(transaction.getFromAccount(), transaction.getAmount())) {
+            throw new IllegalStateException("Insufficient balance");
+        }
+        
+        // Execute
+        accountService.processTransaction(transaction);
+        transactionRepository.save(transaction);
+    }
+    
+    @UpdateOperation
+    public void updateTransaction(TransactionRequest transaction) {
+        transactionRepository.save(transaction);
+    }
+    
+    @DeleteOperation
+    public void deleteTransaction(String transactionId) {
+        transactionRepository.deleteById(transactionId);
+    }
+    
+    // Regular business methods
+    public List<TransactionRequest> getAllTransactions() {
+        return transactionRepository.findAll();
+    }
+}
+
+// ============================================================================
+// USAGE - SUPER SIMPLE!
+// ============================================================================
+
+@RestController
+@RequestMapping("/api/demo")
+public class DemoController {
+    
+    private final MakerCheckerFramework framework;
+    private final UserService userService;
+    private final TransactionService transactionService;
+    
+    public DemoController(MakerCheckerFramework framework, UserService userService, TransactionService transactionService) {
+        this.framework = framework;
+        this.userService = userService;
+        this.transactionService = transactionService;
+    }
+    
+    @PostMapping("/users/submit")
+    public PendingOperation submitUser(@RequestBody User user, @RequestParam String makerId) {
+        return framework.submitForApproval(user, OperationType.CREATE, makerId);
+    }
+    
+    @PostMapping("/transactions/submit")
+    public PendingOperation submitTransaction(@RequestBody TransactionRequest txn, @RequestParam String makerId) {
+        return framework.submitForApproval(txn, OperationType.CREATE, makerId);
+    }
+}
+
+// ============================================================================
+// LIBRARY STARTER CONFIGURATION
+// ============================================================================
+
+// For library users - just add this to their application.properties:
+// maker-checker.enabled=true (optional, defaults to true)
+
+// And add the dependency - that's it!
+// The framework auto-discovers all @MakerCheckerEntity classes and @MakerCheckerService beans
