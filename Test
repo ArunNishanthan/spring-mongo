@@ -1,0 +1,481 @@
+// Core interfaces and abstract classes
+
+// 1. Base interface for entities that can participate in maker-checker workflow
+public interface MakerCheckerEntity {
+    String getEntityId();
+    String getEntityType();
+}
+
+// 2. Enum for operation types
+public enum OperationType {
+    CREATE, UPDATE, DELETE
+}
+
+// 3. Enum for approval status
+public enum ApprovalStatus {
+    PENDING, APPROVED, REJECTED
+}
+
+// 4. Generic pending operation entity
+@Entity
+@Table(name = "pending_operations")
+public class PendingOperation {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    
+    @Column(name = "entity_id", nullable = false)
+    private String entityId;
+    
+    @Column(name = "entity_type", nullable = false)
+    private String entityType;
+    
+    @Enumerated(EnumType.STRING)
+    @Column(name = "operation_type", nullable = false)
+    private OperationType operationType;
+    
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false)
+    private ApprovalStatus status = ApprovalStatus.PENDING;
+    
+    @Column(name = "maker_id", nullable = false)
+    private String makerId;
+    
+    @Column(name = "checker_id")
+    private String checkerId;
+    
+    @Column(name = "operation_data", columnDefinition = "TEXT")
+    private String operationData; // JSON representation of the operation
+    
+    @Column(name = "created_at", nullable = false)
+    private LocalDateTime createdAt = LocalDateTime.now();
+    
+    @Column(name = "checked_at")
+    private LocalDateTime checkedAt;
+    
+    @Column(name = "comments")
+    private String comments;
+    
+    // Constructors, getters, and setters
+    public PendingOperation() {}
+    
+    public PendingOperation(String entityId, String entityType, OperationType operationType, 
+                          String makerId, String operationData) {
+        this.entityId = entityId;
+        this.entityType = entityType;
+        this.operationType = operationType;
+        this.makerId = makerId;
+        this.operationData = operationData;
+    }
+    
+    // All getters and setters
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
+    
+    public String getEntityId() { return entityId; }
+    public void setEntityId(String entityId) { this.entityId = entityId; }
+    
+    public String getEntityType() { return entityType; }
+    public void setEntityType(String entityType) { this.entityType = entityType; }
+    
+    public OperationType getOperationType() { return operationType; }
+    public void setOperationType(OperationType operationType) { this.operationType = operationType; }
+    
+    public ApprovalStatus getStatus() { return status; }
+    public void setStatus(ApprovalStatus status) { this.status = status; }
+    
+    public String getMakerId() { return makerId; }
+    public void setMakerId(String makerId) { this.makerId = makerId; }
+    
+    public String getCheckerId() { return checkerId; }
+    public void setCheckerId(String checkerId) { this.checkerId = checkerId; }
+    
+    public String getOperationData() { return operationData; }
+    public void setOperationData(String operationData) { this.operationData = operationData; }
+    
+    public LocalDateTime getCreatedAt() { return createdAt; }
+    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
+    
+    public LocalDateTime getCheckedAt() { return checkedAt; }
+    public void setCheckedAt(LocalDateTime checkedAt) { this.checkedAt = checkedAt; }
+    
+    public String getComments() { return comments; }
+    public void setComments(String comments) { this.comments = comments; }
+}
+
+// 5. Repository for pending operations
+@Repository
+public interface PendingOperationRepository extends JpaRepository<PendingOperation, Long> {
+    List<PendingOperation> findByStatusAndEntityType(ApprovalStatus status, String entityType);
+    List<PendingOperation> findByMakerId(String makerId);
+    List<PendingOperation> findByStatus(ApprovalStatus status);
+    Optional<PendingOperation> findByEntityIdAndEntityTypeAndStatus(String entityId, String entityType, ApprovalStatus status);
+}
+
+// 6. Interface for operation handlers
+public interface OperationHandler<T extends MakerCheckerEntity> {
+    void executeCreate(T entity);
+    void executeUpdate(T entity);
+    void executeDelete(String entityId);
+    T deserializeEntity(String operationData);
+    String serializeEntity(T entity);
+    String getEntityType();
+}
+
+// 7. Core service for maker-checker operations
+@Service
+@Transactional
+public class MakerCheckerService {
+    
+    private final PendingOperationRepository pendingOperationRepository;
+    private final Map<String, OperationHandler<?>> operationHandlers;
+    private final ObjectMapper objectMapper;
+    
+    public MakerCheckerService(PendingOperationRepository pendingOperationRepository,
+                              List<OperationHandler<?>> handlers,
+                              ObjectMapper objectMapper) {
+        this.pendingOperationRepository = pendingOperationRepository;
+        this.objectMapper = objectMapper;
+        this.operationHandlers = handlers.stream()
+            .collect(Collectors.toMap(OperationHandler::getEntityType, h -> h));
+    }
+    
+    public <T extends MakerCheckerEntity> PendingOperation submitForApproval(
+            T entity, OperationType operationType, String makerId) {
+        
+        OperationHandler<T> handler = getHandler(entity.getEntityType());
+        String operationData = handler.serializeEntity(entity);
+        
+        // Check if there's already a pending operation for this entity
+        Optional<PendingOperation> existing = pendingOperationRepository
+            .findByEntityIdAndEntityTypeAndStatus(
+                entity.getEntityId(), 
+                entity.getEntityType(), 
+                ApprovalStatus.PENDING
+            );
+            
+        if (existing.isPresent()) {
+            throw new IllegalStateException("Pending operation already exists for this entity");
+        }
+        
+        PendingOperation pendingOp = new PendingOperation(
+            entity.getEntityId(),
+            entity.getEntityType(),
+            operationType,
+            makerId,
+            operationData
+        );
+        
+        return pendingOperationRepository.save(pendingOp);
+    }
+    
+    public void approveOperation(Long operationId, String checkerId, String comments) {
+        PendingOperation pendingOp = pendingOperationRepository.findById(operationId)
+            .orElseThrow(() -> new IllegalArgumentException("Operation not found"));
+            
+        if (pendingOp.getStatus() != ApprovalStatus.PENDING) {
+            throw new IllegalStateException("Operation is not in pending status");
+        }
+        
+        if (pendingOp.getMakerId().equals(checkerId)) {
+            throw new IllegalStateException("Maker and checker cannot be the same person");
+        }
+        
+        try {
+            executeOperation(pendingOp);
+            
+            pendingOp.setStatus(ApprovalStatus.APPROVED);
+            pendingOp.setCheckerId(checkerId);
+            pendingOp.setCheckedAt(LocalDateTime.now());
+            pendingOp.setComments(comments);
+            
+            pendingOperationRepository.save(pendingOp);
+            
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to execute approved operation", e);
+        }
+    }
+    
+    public void rejectOperation(Long operationId, String checkerId, String comments) {
+        PendingOperation pendingOp = pendingOperationRepository.findById(operationId)
+            .orElseThrow(() -> new IllegalArgumentException("Operation not found"));
+            
+        if (pendingOp.getStatus() != ApprovalStatus.PENDING) {
+            throw new IllegalStateException("Operation is not in pending status");
+        }
+        
+        if (pendingOp.getMakerId().equals(checkerId)) {
+            throw new IllegalStateException("Maker and checker cannot be the same person");
+        }
+        
+        pendingOp.setStatus(ApprovalStatus.REJECTED);
+        pendingOp.setCheckerId(checkerId);
+        pendingOp.setCheckedAt(LocalDateTime.now());
+        pendingOp.setComments(comments);
+        
+        pendingOperationRepository.save(pendingOp);
+    }
+    
+    public List<PendingOperation> getPendingOperations() {
+        return pendingOperationRepository.findByStatus(ApprovalStatus.PENDING);
+    }
+    
+    public List<PendingOperation> getPendingOperationsByType(String entityType) {
+        return pendingOperationRepository.findByStatusAndEntityType(ApprovalStatus.PENDING, entityType);
+    }
+    
+    public List<PendingOperation> getOperationsByMaker(String makerId) {
+        return pendingOperationRepository.findByMakerId(makerId);
+    }
+    
+    @SuppressWarnings("unchecked")
+    private <T extends MakerCheckerEntity> OperationHandler<T> getHandler(String entityType) {
+        OperationHandler<?> handler = operationHandlers.get(entityType);
+        if (handler == null) {
+            throw new IllegalArgumentException("No handler found for entity type: " + entityType);
+        }
+        return (OperationHandler<T>) handler;
+    }
+    
+    @SuppressWarnings("unchecked")
+    private void executeOperation(PendingOperation pendingOp) {
+        OperationHandler<MakerCheckerEntity> handler = getHandler(pendingOp.getEntityType());
+        
+        switch (pendingOp.getOperationType()) {
+            case CREATE:
+                MakerCheckerEntity createEntity = handler.deserializeEntity(pendingOp.getOperationData());
+                handler.executeCreate(createEntity);
+                break;
+                
+            case UPDATE:
+                MakerCheckerEntity updateEntity = handler.deserializeEntity(pendingOp.getOperationData());
+                handler.executeUpdate(updateEntity);
+                break;
+                
+            case DELETE:
+                handler.executeDelete(pendingOp.getEntityId());
+                break;
+                
+            default:
+                throw new IllegalArgumentException("Unsupported operation type: " + pendingOp.getOperationType());
+        }
+    }
+}
+
+// 8. REST Controller for maker-checker operations
+@RestController
+@RequestMapping("/api/maker-checker")
+public class MakerCheckerController {
+    
+    private final MakerCheckerService makerCheckerService;
+    
+    public MakerCheckerController(MakerCheckerService makerCheckerService) {
+        this.makerCheckerService = makerCheckerService;
+    }
+    
+    @GetMapping("/pending")
+    public ResponseEntity<List<PendingOperation>> getPendingOperations() {
+        return ResponseEntity.ok(makerCheckerService.getPendingOperations());
+    }
+    
+    @GetMapping("/pending/{entityType}")
+    public ResponseEntity<List<PendingOperation>> getPendingOperationsByType(@PathVariable String entityType) {
+        return ResponseEntity.ok(makerCheckerService.getPendingOperationsByType(entityType));
+    }
+    
+    @GetMapping("/maker/{makerId}")
+    public ResponseEntity<List<PendingOperation>> getOperationsByMaker(@PathVariable String makerId) {
+        return ResponseEntity.ok(makerCheckerService.getOperationsByMaker(makerId));
+    }
+    
+    @PostMapping("/approve/{operationId}")
+    public ResponseEntity<Void> approveOperation(
+            @PathVariable Long operationId,
+            @RequestParam String checkerId,
+            @RequestParam(required = false) String comments) {
+        
+        makerCheckerService.approveOperation(operationId, checkerId, comments);
+        return ResponseEntity.ok().build();
+    }
+    
+    @PostMapping("/reject/{operationId}")
+    public ResponseEntity<Void> rejectOperation(
+            @PathVariable Long operationId,
+            @RequestParam String checkerId,
+            @RequestParam(required = false) String comments) {
+        
+        makerCheckerService.rejectOperation(operationId, checkerId, comments);
+        return ResponseEntity.ok().build();
+    }
+}
+
+// 9. Configuration class
+@Configuration
+@EnableJpa
+public class MakerCheckerConfig {
+    
+    @Bean
+    public ObjectMapper objectMapper() {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.registerModule(new JavaTimeModule());
+        mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        return mapper;
+    }
+}
+
+// Example implementation for a User entity
+
+// User entity implementing MakerCheckerEntity
+@Entity
+@Table(name = "users")
+public class User implements MakerCheckerEntity {
+    @Id
+    private String id;
+    
+    @Column(name = "username", unique = true, nullable = false)
+    private String username;
+    
+    @Column(name = "email", nullable = false)
+    private String email;
+    
+    @Column(name = "full_name")
+    private String fullName;
+    
+    @Column(name = "active")
+    private boolean active = true;
+    
+    // Constructors
+    public User() {}
+    
+    public User(String id, String username, String email, String fullName) {
+        this.id = id;
+        this.username = username;
+        this.email = email;
+        this.fullName = fullName;
+    }
+    
+    @Override
+    public String getEntityId() {
+        return id;
+    }
+    
+    @Override
+    public String getEntityType() {
+        return "USER";
+    }
+    
+    // Getters and setters
+    public String getId() { return id; }
+    public void setId(String id) { this.id = id; }
+    
+    public String getUsername() { return username; }
+    public void setUsername(String username) { this.username = username; }
+    
+    public String getEmail() { return email; }
+    public void setEmail(String email) { this.email = email; }
+    
+    public String getFullName() { return fullName; }
+    public void setFullName(String fullName) { this.fullName = fullName; }
+    
+    public boolean isActive() { return active; }
+    public void setActive(boolean active) { this.active = active; }
+}
+
+// User repository
+@Repository
+public interface UserRepository extends JpaRepository<User, String> {
+    Optional<User> findByUsername(String username);
+}
+
+// User operation handler
+@Component
+public class UserOperationHandler implements OperationHandler<User> {
+    
+    private final UserRepository userRepository;
+    private final ObjectMapper objectMapper;
+    
+    public UserOperationHandler(UserRepository userRepository, ObjectMapper objectMapper) {
+        this.userRepository = userRepository;
+        this.objectMapper = objectMapper;
+    }
+    
+    @Override
+    public void executeCreate(User entity) {
+        userRepository.save(entity);
+    }
+    
+    @Override
+    public void executeUpdate(User entity) {
+        if (!userRepository.existsById(entity.getId())) {
+            throw new IllegalArgumentException("User not found for update: " + entity.getId());
+        }
+        userRepository.save(entity);
+    }
+    
+    @Override
+    public void executeDelete(String entityId) {
+        if (!userRepository.existsById(entityId)) {
+            throw new IllegalArgumentException("User not found for deletion: " + entityId);
+        }
+        userRepository.deleteById(entityId);
+    }
+    
+    @Override
+    public User deserializeEntity(String operationData) {
+        try {
+            return objectMapper.readValue(operationData, User.class);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to deserialize User entity", e);
+        }
+    }
+    
+    @Override
+    public String serializeEntity(User entity) {
+        try {
+            return objectMapper.writeValueAsString(entity);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to serialize User entity", e);
+        }
+    }
+    
+    @Override
+    public String getEntityType() {
+        return "USER";
+    }
+}
+
+// User service with maker-checker integration
+@Service
+@Transactional
+public class UserService {
+    
+    private final MakerCheckerService makerCheckerService;
+    private final UserRepository userRepository;
+    
+    public UserService(MakerCheckerService makerCheckerService, UserRepository userRepository) {
+        this.makerCheckerService = makerCheckerService;
+        this.userRepository = userRepository;
+    }
+    
+    public PendingOperation createUserRequest(User user, String makerId) {
+        return makerCheckerService.submitForApproval(user, OperationType.CREATE, makerId);
+    }
+    
+    public PendingOperation updateUserRequest(User user, String makerId) {
+        return makerCheckerService.submitForApproval(user, OperationType.UPDATE, makerId);
+    }
+    
+    public PendingOperation deleteUserRequest(String userId, String makerId) {
+        User user = userRepository.findById(userId)
+            .orElseThrow(() -> new IllegalArgumentException("User not found: " + userId));
+        return makerCheckerService.submitForApproval(user, OperationType.DELETE, makerId);
+    }
+    
+    public List<User> getAllUsers() {
+        return userRepository.findAll();
+    }
+    
+    public Optional<User> getUserById(String id) {
+        return userRepository.findById(id);
+    }
+}
